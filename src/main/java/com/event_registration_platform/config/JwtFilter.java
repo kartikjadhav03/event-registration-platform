@@ -30,17 +30,22 @@ public class JwtFilter extends OncePerRequestFilter {
 
         if (authHeader != null && authHeader.startsWith("Bearer ")) {
             String token = authHeader.substring(7);
+            System.out.println("Received token: " + token);
+            System.out.println("Is valid: " + jwtUtil.isTokenValid(token));
 
             if (jwtUtil.isTokenValid(token)) {
                 String email = jwtUtil.extractEmail(token);
+                System.out.println("Extracted email: " + email);
 
                 UsernamePasswordAuthenticationToken authToken =
                         new UsernamePasswordAuthenticationToken(email, null, Collections.emptyList());
 
                 SecurityContextHolder.getContext().setAuthentication(authToken);
             }
+        } else {
+            System.out.println("No Bearer token found in header");
         }
 
         filterChain.doFilter(request, response);
     }
-}
+    }

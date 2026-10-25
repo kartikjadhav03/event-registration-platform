@@ -68,13 +68,22 @@ public class UserServiceImpl implements UserService {
 
     @Override
     public String loginUser(LoginRequest request) {
+        System.out.println("Login attempt for: " + request.getEmail());
+
         User user = userRepository.findByEmail(request.getEmail())
                 .orElseThrow(() -> new RuntimeException("Invalid email or password"));
 
+        System.out.println("User found: " + user.getEmail());
         if (!passwordEncoder.matches(request.getPassword(), user.getPassword())) {
             throw new RuntimeException("Invalid email or password");
         }
 
-        return jwtUtil.generateToken(user.getEmail());
+        System.out.println("Password matched, generating token...");
+
+        String token = jwtUtil.generateToken(user.getEmail());
+
+        System.out.println("Token generated: " + token);
+
+        return token;
     }
 }
