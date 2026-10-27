@@ -1,5 +1,6 @@
 package com.event_registration_platform.controller;
 
+import com.event_registration_platform.dto.AuthResponse;
 import com.event_registration_platform.dto.LoginRequest;
 import com.event_registration_platform.dto.RegisterRequest;
 import com.event_registration_platform.dto.UserResponseDTO;
@@ -23,12 +24,17 @@ public class AuthController {
     }
 
     @GetMapping("/verify")
-    public String verify(@RequestParam String token){
+    public String verify(@RequestParam String token) {
         return userService.verifyEmail(token);
     }
 
     @PostMapping("/login")
-    public String login(@Valid @RequestBody LoginRequest request) {
+    public AuthResponse login(@Valid @RequestBody LoginRequest request) {
         return userService.loginUser(request);
+    }
+
+    @PostMapping("/refresh")
+    public AuthResponse refresh(@RequestParam String refreshToken) {
+        return userService.refreshAccessToken(refreshToken);
     }
 }

@@ -1,5 +1,6 @@
 package com.event_registration_platform.service;
 
+import com.event_registration_platform.dto.AuthResponse;
 import com.event_registration_platform.dto.RegisterRequest;
 import com.event_registration_platform.dto.UserResponseDTO;
 import com.event_registration_platform.dto.LoginRequest;
@@ -67,23 +68,44 @@ public class UserServiceImpl implements UserService {
     }
 
     @Override
-    public String loginUser(LoginRequest request) {
-        System.out.println("Login attempt for: " + request.getEmail());
-
+    public AuthResponse loginUser(LoginRequest request) {
         User user = userRepository.findByEmail(request.getEmail())
                 .orElseThrow(() -> new RuntimeException("Invalid email or password"));
 
-        System.out.println("User found: " + user.getEmail());
         if (!passwordEncoder.matches(request.getPassword(), user.getPassword())) {
             throw new RuntimeException("Invalid email or password");
         }
 
-        System.out.println("Password matched, generating token...");
+        String accessToken = jwtUtil.generateToken(user.getEmail(), user.getRole().toString());
+        String refreshToken = jwtUtil.generateRefreshToken(user.getEmail());
 
-        String token = jwtUtil.generateToken(user.getEmail());
+        user.setRefreshToken(refreshToken);
+        userRepository.save(user);
 
-        System.out.println("Token generated: " + token);
-
-        return token;
+        return new AuthResponse(accessToken, refreshToken);
     }
-}
+
+    @Override
+    public AuthResponse refreshAccessToken(String refreshToken) {
+        if (!jwtUtil.isTokenValid(refreshToken)) {
+            throw new RuntimeException("Invalid refresh token");
+        }
+
+        String email = jwtUtil.extractEmail(refreshToken);
+        User user = userRepository.findByEmail(email)
+                .orElseThrow(() -> new RuntimeException("User not found"));
+
+        if (!refreshToken.equals(user.getRefreshToken())) {
+            throw new RuntimeException("Refresh token mismatch or already used");
+        }
+
+        String newAccessToken = jwtUtil.generateToken(user.getEmail(), user.getRole().toString());
+        String newRefreshToken = jwtUtil.generateRefreshToken(user.getEmail());
+
+        user.setRefreshToken(newRefreshToken);
+        userRepository.save(user);
+
+        return new AuthResponse(newAccessToken, newRefreshToken);
+    }
+
+    }
