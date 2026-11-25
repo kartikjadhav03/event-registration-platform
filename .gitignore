@@ -1,3 +1,4 @@
+
 HELP.md
 target/
 .mvn/wrapper/maven-wrapper.jar
@@ -31,3 +32,15 @@ build/
 
 ### VS Code ###
 .vscode/
+
+### Environment variables and secrets ###
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+### Local application configuration ###
+application-local.properties
+application-secrets.properties
+application-*.local.properties

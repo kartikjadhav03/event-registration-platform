@@ -1,12 +1,10 @@
 package com.event_registration_platform.controller;
 
-import com.event_registration_platform.dto.AuthResponse;
-import com.event_registration_platform.dto.LoginRequest;
-import com.event_registration_platform.dto.RegisterRequest;
-import com.event_registration_platform.dto.UserResponseDTO;
+import com.event_registration_platform.dto.*;
 import com.event_registration_platform.service.UserService;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.*;
+
 
 @RestController
 @RequestMapping("/api/auth")
@@ -36,5 +34,14 @@ public class AuthController {
     @PostMapping("/refresh")
     public AuthResponse refresh(@RequestParam String refreshToken) {
         return userService.refreshAccessToken(refreshToken);
+    }
+    @PostMapping("/forgot-password")
+    public String forgotPassword(@Valid @RequestBody ForgotPasswordRequest request) {
+        return userService.forgotPassword(request);
+    }
+
+    @PostMapping("/reset-password")
+    public String resetPassword(@Valid @RequestBody ResetPasswordRequest request) {
+        return userService.resetPassword(request);
     }
 }
