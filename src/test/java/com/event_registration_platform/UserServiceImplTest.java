@@ -10,17 +10,18 @@ import com.event_registration_platform.util.JwtUtil;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
-
 import org.springframework.security.crypto.password.PasswordEncoder;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.HexFormat;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
@@ -50,11 +51,8 @@ class UserServiceImplTest {
     @InjectMocks
     private UserServiceImpl userService;
 
-    // Helper method
     private User createUser() {
-
         User user = new User();
-
         user.setId(1L);
         user.setName("Kartik");
         user.setEmail("kartik@gmail.com");
@@ -62,18 +60,24 @@ class UserServiceImplTest {
         user.setRole(Role.ATTENDEE);
         user.setVerified(true);
         user.setRefreshToken("old-refresh-token");
-
         return user;
     }
 
-    // 1. Register new user
+    private String hashToken(String token) {
+        try {
+            byte[] hash = MessageDigest.getInstance("SHA-256")
+                    .digest(token.getBytes(StandardCharsets.UTF_8));
+
+            return HexFormat.of().formatHex(hash);
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
     @Test
     void registerUserSuccessfully() {
-
         RegisterRequest request = new RegisterRequest(
-                "Kartik",
-                "kartik@gmail.com",
-                "Password123"
+                "Kartik", "kartik@gmail.com", "Password123"
         );
 
         when(userRepository.findByEmail(request.getEmail()))
@@ -93,22 +97,17 @@ class UserServiceImplTest {
 
         verify(passwordEncoder).encode("Password123");
         verify(emailService).sendVerificationEmail(
-                eq("kartik@gmail.com"),
-                anyString()
+                eq("kartik@gmail.com"), anyString()
         );
     }
 
-    // 2. Existing unverified user registration
     @Test
     void registerExistingUnverifiedUser() {
-
         User user = createUser();
         user.setVerified(false);
 
         RegisterRequest request = new RegisterRequest(
-                "New Name",
-                "kartik@gmail.com",
-                "Password123"
+                "New Name", "kartik@gmail.com", "Password123"
         );
 
         when(userRepository.findByEmail(request.getEmail()))
@@ -123,21 +122,16 @@ class UserServiceImplTest {
         assertNotNull(user.getVerificationTokenExpiry());
 
         verify(emailService).sendVerificationEmail(
-                eq(user.getEmail()),
-                anyString()
+                eq(user.getEmail()), anyString()
         );
     }
 
-    // 3. Reject already verified account
     @Test
     void registerExistingVerifiedUserThrowsException() {
-
         User user = createUser();
 
         RegisterRequest request = new RegisterRequest(
-                "Kartik",
-                "kartik@gmail.com",
-                "Password123"
+                "Kartik", "kartik@gmail.com", "Password123"
         );
 
         when(userRepository.findByEmail(request.getEmail()))
@@ -154,12 +148,9 @@ class UserServiceImplTest {
         verifyNoInteractions(emailService);
     }
 
-    // 4. Verify email successfully
     @Test
     void verifyEmailSuccessfully() {
-
         User user = createUser();
-
         user.setVerified(false);
         user.setVerificationToken("valid-token");
         user.setVerificationTokenExpiry(
@@ -179,10 +170,8 @@ class UserServiceImplTest {
         verify(userRepository).save(user);
     }
 
-    // 5. Invalid verification token
     @Test
     void verifyEmailWithInvalidToken() {
-
         when(userRepository.findByVerificationToken("wrong-token"))
                 .thenReturn(Optional.empty());
 
@@ -194,12 +183,9 @@ class UserServiceImplTest {
         assertEquals("Invalid token", exception.getMessage());
     }
 
-    // 6. Expired verification token
     @Test
     void verifyEmailWithExpiredToken() {
-
         User user = createUser();
-
         user.setVerificationTokenExpiry(
                 LocalDateTime.now().minusMinutes(5)
         );
@@ -217,23 +203,19 @@ class UserServiceImplTest {
         verify(userRepository, never()).save(any());
     }
 
-    // 7. Login successfully
     @Test
     void loginUserSuccessfully() {
-
         User user = createUser();
 
         LoginRequest request = new LoginRequest(
-                "kartik@gmail.com",
-                "Password123"
+                "kartik@gmail.com", "Password123"
         );
 
         when(userRepository.findByEmail(request.getEmail()))
                 .thenReturn(Optional.of(user));
 
         when(passwordEncoder.matches(
-                "Password123",
-                "encoded-password"
+                "Password123", "encoded-password"
         )).thenReturn(true);
 
         when(jwtUtil.generateToken("kartik@gmail.com", "ATTENDEE"))
@@ -249,18 +231,20 @@ class UserServiceImplTest {
         assertEquals("access-token", response.getAccessToken());
         assertEquals("new-refresh-token", response.getRefreshToken());
 
-        assertEquals("new-refresh-token", user.getRefreshToken());
+        assertEquals(
+                hashToken("new-refresh-token"),
+                user.getRefreshToken()
+        );
+
+        assertNotEquals("new-refresh-token", user.getRefreshToken());
 
         verify(userRepository).save(user);
     }
 
-    // 8. Login with unknown email
     @Test
     void loginWithUnknownEmail() {
-
         LoginRequest request = new LoginRequest(
-                "unknown@gmail.com",
-                "Password123"
+                "unknown@gmail.com", "Password123"
         );
 
         when(userRepository.findByEmail(request.getEmail()))
@@ -271,29 +255,22 @@ class UserServiceImplTest {
                 () -> userService.loginUser(request)
         );
 
-        assertEquals(
-                "Invalid email or password",
-                exception.getMessage()
-        );
+        assertEquals("Invalid email or password", exception.getMessage());
     }
 
-    // 9. Login with wrong password
     @Test
     void loginWithWrongPassword() {
-
         User user = createUser();
 
         LoginRequest request = new LoginRequest(
-                "kartik@gmail.com",
-                "WrongPassword"
+                "kartik@gmail.com", "WrongPassword"
         );
 
         when(userRepository.findByEmail(request.getEmail()))
                 .thenReturn(Optional.of(user));
 
         when(passwordEncoder.matches(
-                "WrongPassword",
-                "encoded-password"
+                "WrongPassword", "encoded-password"
         )).thenReturn(false);
 
         RuntimeException exception = assertThrows(
@@ -301,30 +278,23 @@ class UserServiceImplTest {
                 () -> userService.loginUser(request)
         );
 
-        assertEquals(
-                "Invalid email or password",
-                exception.getMessage()
-        );
+        assertEquals("Invalid email or password", exception.getMessage());
     }
 
-    // 10. Login before email verification
     @Test
     void loginWithUnverifiedEmail() {
-
         User user = createUser();
         user.setVerified(false);
 
         LoginRequest request = new LoginRequest(
-                "kartik@gmail.com",
-                "Password123"
+                "kartik@gmail.com", "Password123"
         );
 
         when(userRepository.findByEmail(request.getEmail()))
                 .thenReturn(Optional.of(user));
 
         when(passwordEncoder.matches(
-                "Password123",
-                "encoded-password"
+                "Password123", "encoded-password"
         )).thenReturn(true);
 
         RuntimeException exception = assertThrows(
@@ -338,11 +308,11 @@ class UserServiceImplTest {
         );
     }
 
-    // 11. Refresh access token successfully
     @Test
     void refreshAccessTokenSuccessfully() {
-
         User user = createUser();
+
+        user.setRefreshToken(hashToken("old-refresh-token"));
 
         when(jwtUtil.isRefreshTokenValid("old-refresh-token"))
                 .thenReturn(true);
@@ -350,7 +320,7 @@ class UserServiceImplTest {
         when(jwtUtil.extractEmail("old-refresh-token"))
                 .thenReturn("kartik@gmail.com");
 
-        when(userRepository.findByEmail("kartik@gmail.com"))
+        when(userRepository.findByEmailForUpdate("kartik@gmail.com"))
                 .thenReturn(Optional.of(user));
 
         when(jwtUtil.generateToken("kartik@gmail.com", "ATTENDEE"))
@@ -368,13 +338,17 @@ class UserServiceImplTest {
         assertEquals("new-access-token", response.getAccessToken());
         assertEquals("new-refresh-token", response.getRefreshToken());
 
+        assertEquals(
+                hashToken("new-refresh-token"),
+                user.getRefreshToken()
+        );
+
+        verify(userRepository).findByEmailForUpdate("kartik@gmail.com");
         verify(userRepository).save(user);
     }
 
-    // 12. Invalid refresh token
     @Test
     void refreshWithInvalidToken() {
-
         when(jwtUtil.isRefreshTokenValid("invalid-token"))
                 .thenReturn(false);
 
@@ -386,11 +360,11 @@ class UserServiceImplTest {
         assertEquals("Invalid refresh token", exception.getMessage());
     }
 
-    // 13. Refresh token mismatch
     @Test
     void refreshWithMismatchedToken() {
-
         User user = createUser();
+
+        user.setRefreshToken(hashToken("old-refresh-token"));
 
         when(jwtUtil.isRefreshTokenValid("different-token"))
                 .thenReturn(true);
@@ -398,7 +372,7 @@ class UserServiceImplTest {
         when(jwtUtil.extractEmail("different-token"))
                 .thenReturn("kartik@gmail.com");
 
-        when(userRepository.findByEmail("kartik@gmail.com"))
+        when(userRepository.findByEmailForUpdate("kartik@gmail.com"))
                 .thenReturn(Optional.of(user));
 
         RuntimeException exception = assertThrows(
@@ -410,19 +384,19 @@ class UserServiceImplTest {
                 "Refresh token mismatch or already used",
                 exception.getMessage()
         );
+
+        verify(userRepository, never()).save(any());
     }
 
-    // 14. Refresh token for unknown user
     @Test
     void refreshWhenUserDoesNotExist() {
-
         when(jwtUtil.isRefreshTokenValid("valid-token"))
                 .thenReturn(true);
 
         when(jwtUtil.extractEmail("valid-token"))
                 .thenReturn("unknown@gmail.com");
 
-        when(userRepository.findByEmail("unknown@gmail.com"))
+        when(userRepository.findByEmailForUpdate("unknown@gmail.com"))
                 .thenReturn(Optional.empty());
 
         RuntimeException exception = assertThrows(
@@ -430,13 +404,11 @@ class UserServiceImplTest {
                 () -> userService.refreshAccessToken("valid-token")
         );
 
-        assertEquals("User not found", exception.getMessage());
+        assertEquals("Invalid refresh token", exception.getMessage());
     }
 
-    // 15. Forgot password for existing user
     @Test
     void forgotPasswordForExistingUser() {
-
         User user = createUser();
 
         ForgotPasswordRequest request = new ForgotPasswordRequest(
@@ -457,15 +429,12 @@ class UserServiceImplTest {
         );
 
         verify(emailService).sendPasswordResetEmail(
-                "kartik@gmail.com",
-                "reset-token"
+                "kartik@gmail.com", "reset-token"
         );
     }
 
-    // 16. Forgot password for unknown user
     @Test
     void forgotPasswordForUnknownUser() {
-
         ForgotPasswordRequest request = new ForgotPasswordRequest(
                 "unknown@gmail.com"
         );
@@ -484,15 +453,12 @@ class UserServiceImplTest {
         verifyNoInteractions(emailService);
     }
 
-    // 17. Reset password successfully
     @Test
     void resetPasswordSuccessfully() {
-
         User user = createUser();
 
         ResetPasswordRequest request = new ResetPasswordRequest(
-                "reset-token",
-                "NewPassword123"
+                "reset-token", "NewPassword123"
         );
 
         when(passwordResetService.getEmailByToken("reset-token"))
@@ -516,13 +482,10 @@ class UserServiceImplTest {
         verify(userRepository).save(user);
     }
 
-    // 18. Reset password with invalid token
     @Test
     void resetPasswordWithInvalidToken() {
-
         ResetPasswordRequest request = new ResetPasswordRequest(
-                "invalid-token",
-                "NewPassword123"
+                "invalid-token", "NewPassword123"
         );
 
         when(passwordResetService.getEmailByToken("invalid-token"))
@@ -539,13 +502,10 @@ class UserServiceImplTest {
         );
     }
 
-    // 19. Reset password when user does not exist
     @Test
     void resetPasswordWhenUserDoesNotExist() {
-
         ResetPasswordRequest request = new ResetPasswordRequest(
-                "reset-token",
-                "NewPassword123"
+                "reset-token", "NewPassword123"
         );
 
         when(passwordResetService.getEmailByToken("reset-token"))
@@ -562,10 +522,8 @@ class UserServiceImplTest {
         assertEquals("User not found", exception.getMessage());
     }
 
-    // 20. Get profile successfully
     @Test
     void getMyProfileSuccessfully() {
-
         User user = createUser();
 
         when(userRepository.findByEmail("kartik@gmail.com"))
@@ -580,10 +538,8 @@ class UserServiceImplTest {
         assertEquals("ATTENDEE", response.getRole());
     }
 
-    // 21. Get profile when user does not exist
     @Test
     void getMyProfileWhenUserDoesNotExist() {
-
         when(userRepository.findByEmail("unknown@gmail.com"))
                 .thenReturn(Optional.empty());
 
@@ -595,10 +551,8 @@ class UserServiceImplTest {
         assertEquals("User not found", exception.getMessage());
     }
 
-    // 22. Update profile successfully
     @Test
     void updateMyProfileSuccessfully() {
-
         User user = createUser();
 
         when(userRepository.findByEmail("kartik@gmail.com"))
@@ -607,8 +561,7 @@ class UserServiceImplTest {
         when(userRepository.save(user)).thenReturn(user);
 
         UserResponseDTO response = userService.updateMyProfile(
-                "kartik@gmail.com",
-                "Updated Kartik"
+                "kartik@gmail.com", "Updated Kartik"
         );
 
         assertEquals("Updated Kartik", response.getName());
@@ -617,22 +570,17 @@ class UserServiceImplTest {
         verify(userRepository).save(user);
     }
 
-    // 23. Get all users with pagination
     @Test
     void getAllUsersSuccessfully() {
-
         User user = createUser();
 
         PageRequest pageable = PageRequest.of(0, 10);
-
         Page<User> userPage = new PageImpl<>(List.of(user));
 
         when(userRepository.findAll(pageable))
                 .thenReturn(userPage);
 
-        Page<UserResponseDTO> response = userService.getAllUsers(
-                pageable
-        );
+        Page<UserResponseDTO> response = userService.getAllUsers(pageable);
 
         assertEquals(1, response.getTotalElements());
         assertEquals("Kartik", response.getContent().get(0).getName());
@@ -642,10 +590,8 @@ class UserServiceImplTest {
         );
     }
 
-    // 24. Get user by ID successfully
     @Test
     void getUserByIdSuccessfully() {
-
         User user = createUser();
 
         when(userRepository.findById(1L))
@@ -658,10 +604,8 @@ class UserServiceImplTest {
         assertEquals("ATTENDEE", response.getRole());
     }
 
-    // 25. Get user by ID when user does not exist
     @Test
     void getUserByIdWhenUserDoesNotExist() {
-
         when(userRepository.findById(100L))
                 .thenReturn(Optional.empty());
 

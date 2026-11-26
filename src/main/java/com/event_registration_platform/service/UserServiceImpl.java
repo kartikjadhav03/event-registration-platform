@@ -11,8 +11,13 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.LocalDateTime;
+import java.util.HexFormat;
 import java.util.UUID;
 
 @Service
@@ -38,73 +43,48 @@ public class UserServiceImpl implements UserService {
         this.passwordResetService = passwordResetService;
     }
 
-    // Register User
     @Override
     public UserResponseDTO registerUser(RegisterRequest request) {
 
-        User user = userRepository.findByEmail(request.getEmail())
-                .orElse(null);
+        String email = normalizeEmail(request.getEmail());
 
-        // Existing account
+        User user = userRepository.findByEmail(email).orElse(null);
+
         if (user != null) {
-
-            // Already verified account
             if (user.isVerified()) {
                 throw new RuntimeException("Email already registered");
             }
 
-            // Generate fresh verification token
             String token = UUID.randomUUID().toString();
 
             user.setVerificationToken(token);
-            user.setVerificationTokenExpiry(
-                    LocalDateTime.now().plusMinutes(15)
-            );
+            user.setVerificationTokenExpiry(LocalDateTime.now().plusMinutes(15));
 
             User savedUser = userRepository.save(user);
 
-            emailService.sendVerificationEmail(
-                    savedUser.getEmail(),
-                    token
-            );
+            emailService.sendVerificationEmail(savedUser.getEmail(), token);
 
-            return new UserResponseDTO(
-                    savedUser.getName(),
-                    savedUser.getEmail(),
-                    savedUser.getRole().toString()
-            );
+            return toUserResponse(savedUser);
         }
 
-        // New account
         user = new User();
-
-        user.setName(request.getName());
-        user.setEmail(request.getEmail());
+        user.setName(request.getName().trim());
+        user.setEmail(email);
         user.setPassword(passwordEncoder.encode(request.getPassword()));
         user.setRole(Role.ATTENDEE);
 
         String token = UUID.randomUUID().toString();
 
         user.setVerificationToken(token);
-        user.setVerificationTokenExpiry(
-                LocalDateTime.now().plusMinutes(15)
-        );
+        user.setVerificationTokenExpiry(LocalDateTime.now().plusMinutes(15));
 
         User savedUser = userRepository.save(user);
 
-        emailService.sendVerificationEmail(
-                savedUser.getEmail(),
-                token
-        );
+        emailService.sendVerificationEmail(savedUser.getEmail(), token);
 
-        return new UserResponseDTO(
-                savedUser.getName(),
-                savedUser.getEmail(),
-                savedUser.getRole().toString()
-        );
+        return toUserResponse(savedUser);
     }
 
-    // Verify Email
     @Override
     public String verifyEmail(String token) {
 
@@ -113,7 +93,6 @@ public class UserServiceImpl implements UserService {
 
         if (user.getVerificationTokenExpiry() == null ||
                 user.getVerificationTokenExpiry().isBefore(LocalDateTime.now())) {
-
             throw new RuntimeException("Token expired");
         }
 
@@ -126,196 +105,179 @@ public class UserServiceImpl implements UserService {
         return "Email verified successfully";
     }
 
-    // Login User
     @Override
     public AuthResponse loginUser(LoginRequest request) {
 
-        User user = userRepository.findByEmail(request.getEmail())
-                .orElseThrow(() ->
-                        new RuntimeException("Invalid email or password"));
+        String email = normalizeEmail(request.getEmail());
 
-        if (!passwordEncoder.matches(
-                request.getPassword(),
-                user.getPassword())) {
+        User user = userRepository.findByEmail(email)
+                .orElseThrow(() -> new RuntimeException("Invalid email or password"));
 
+        if (!passwordEncoder.matches(request.getPassword(), user.getPassword())) {
             throw new RuntimeException("Invalid email or password");
         }
 
-        // Check email verification
         if (!user.isVerified()) {
             throw new RuntimeException("Please verify your email first");
         }
 
+        if (user.getRole() == null) {
+            throw new RuntimeException("User role is not configured");
+        }
+
         String accessToken = jwtUtil.generateToken(
-                user.getEmail(),
-                user.getRole().toString()
-        );
+                user.getEmail(), user.getRole().toString());
 
-        String refreshToken = jwtUtil.generateRefreshToken(
-                user.getEmail()
-        );
+        String refreshToken = jwtUtil.generateRefreshToken(user.getEmail());
 
-        user.setRefreshToken(refreshToken);
+        user.setRefreshToken(hashToken(refreshToken));
         userRepository.save(user);
 
         return new AuthResponse(accessToken, refreshToken);
     }
 
-    // Refresh Access Token
     @Override
+    @Transactional
     public AuthResponse refreshAccessToken(String refreshToken) {
 
-        if (!jwtUtil.isRefreshTokenValid(refreshToken)) {
+        if (refreshToken == null || refreshToken.isBlank() ||
+                !jwtUtil.isRefreshTokenValid(refreshToken)) {
             throw new RuntimeException("Invalid refresh token");
         }
 
-        String email = jwtUtil.extractEmail(refreshToken);
+        String email = normalizeEmail(jwtUtil.extractEmail(refreshToken));
 
-        User user = userRepository.findByEmail(email)
-                .orElseThrow(() ->
-                        new RuntimeException("User not found"));
-
-        if (!refreshToken.equals(user.getRefreshToken())) {
-            throw new RuntimeException(
-                    "Refresh token mismatch or already used"
-            );
-        }
+        User user = userRepository.findByEmailForUpdate(email)
+                .orElseThrow(() -> new RuntimeException("Invalid refresh token"));
 
         if (!user.isVerified()) {
             throw new RuntimeException("Email is not verified");
         }
 
+        if (user.getRole() == null) {
+            throw new RuntimeException("User role is not configured");
+        }
+
+        String incomingHash = hashToken(refreshToken);
+        String storedHash = user.getRefreshToken();
+
+        if (storedHash == null ||
+                !MessageDigest.isEqual(
+                        incomingHash.getBytes(StandardCharsets.UTF_8),
+                        storedHash.getBytes(StandardCharsets.UTF_8))) {
+            throw new RuntimeException("Refresh token mismatch or already used");
+        }
+
         String newAccessToken = jwtUtil.generateToken(
-                user.getEmail(),
-                user.getRole().toString()
-        );
+                user.getEmail(), user.getRole().toString());
 
-        String newRefreshToken = jwtUtil.generateRefreshToken(
-                user.getEmail()
-        );
+        String newRefreshToken = jwtUtil.generateRefreshToken(user.getEmail());
 
-        user.setRefreshToken(newRefreshToken);
+        user.setRefreshToken(hashToken(newRefreshToken));
         userRepository.save(user);
 
-        return new AuthResponse(
-                newAccessToken,
-                newRefreshToken
-        );
+        return new AuthResponse(newAccessToken, newRefreshToken);
     }
 
-    // Forgot Password
     @Override
     public String forgotPassword(ForgotPasswordRequest request) {
 
-        User user = userRepository.findByEmail(request.getEmail())
-                .orElse(null);
+        String email = normalizeEmail(request.getEmail());
 
-        // Do not reveal whether email exists
+        User user = userRepository.findByEmail(email).orElse(null);
+
         if (user != null) {
-
-            String token = passwordResetService.generateResetToken(
-                    user.getEmail()
-            );
-
-            emailService.sendPasswordResetEmail(
-                    user.getEmail(),
-                    token
-            );
+            String token = passwordResetService.generateResetToken(user.getEmail());
+            emailService.sendPasswordResetEmail(user.getEmail(), token);
         }
 
         return "If the email is registered, a password reset email has been sent";
     }
 
-    // Reset Password
     @Override
     public String resetPassword(ResetPasswordRequest request) {
 
-        String email = passwordResetService.getEmailByToken(
-                request.getToken()
-        );
+        String email = passwordResetService.getEmailByToken(request.getToken());
 
         if (email == null) {
             throw new RuntimeException("Invalid or expired token");
         }
 
-        User user = userRepository.findByEmail(email)
-                .orElseThrow(() ->
-                        new RuntimeException("User not found"));
+        User user = userRepository.findByEmail(normalizeEmail(email))
+                .orElseThrow(() -> new RuntimeException("User not found"));
 
-        user.setPassword(
-                passwordEncoder.encode(request.getNewPassword())
-        );
-
-        // Invalidate old refresh token after password reset
+        user.setPassword(passwordEncoder.encode(request.getNewPassword()));
         user.setRefreshToken(null);
 
         userRepository.save(user);
-
         passwordResetService.deleteToken(request.getToken());
 
         return "Password reset successful";
     }
 
-    // Get My Profile
     @Override
     public UserResponseDTO getMyProfile(String email) {
 
-        User user = userRepository.findByEmail(email)
-                .orElseThrow(() ->
-                        new RuntimeException("User not found"));
+        User user = userRepository.findByEmail(normalizeEmail(email))
+                .orElseThrow(() -> new RuntimeException("User not found"));
 
-        return new UserResponseDTO(
-                user.getName(),
-                user.getEmail(),
-                user.getRole().toString()
-        );
+        return toUserResponse(user);
     }
 
-    // Update My Profile
     @Override
-    public UserResponseDTO updateMyProfile(
-            String email,
-            String name) {
+    public UserResponseDTO updateMyProfile(String email, String name) {
 
-        User user = userRepository.findByEmail(email)
-                .orElseThrow(() ->
-                        new RuntimeException("User not found"));
+        User user = userRepository.findByEmail(normalizeEmail(email))
+                .orElseThrow(() -> new RuntimeException("User not found"));
 
-        user.setName(name);
+        user.setName(name.trim());
 
-        User updatedUser = userRepository.save(user);
-
-        return new UserResponseDTO(
-                updatedUser.getName(),
-                updatedUser.getEmail(),
-                updatedUser.getRole().toString()
-        );
+        return toUserResponse(userRepository.save(user));
     }
 
-    // Admin: Get All Users with Pagination
     @Override
     public Page<UserResponseDTO> getAllUsers(Pageable pageable) {
 
-        return userRepository.findAll(pageable)
-                .map(user -> new UserResponseDTO(
-                        user.getName(),
-                        user.getEmail(),
-                        user.getRole().toString()
-                ));
+        return userRepository.findAll(pageable).map(this::toUserResponse);
     }
 
-    // Admin: Get User By ID
     @Override
     public UserResponseDTO getUserById(Long id) {
 
         User user = userRepository.findById(id)
-                .orElseThrow(() ->
-                        new RuntimeException("User not found"));
+                .orElseThrow(() -> new RuntimeException("User not found"));
+
+        return toUserResponse(user);
+    }
+
+    private UserResponseDTO toUserResponse(User user) {
 
         return new UserResponseDTO(
                 user.getName(),
                 user.getEmail(),
-                user.getRole().toString()
-        );
+                user.getRole().toString());
+    }
+
+    private String normalizeEmail(String email) {
+
+        if (email == null || email.isBlank()) {
+            throw new RuntimeException("Email cannot be empty");
+        }
+
+        return email.trim().toLowerCase();
+    }
+
+    private String hashToken(String token) {
+
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+
+            byte[] hash = digest.digest(token.getBytes(StandardCharsets.UTF_8));
+
+            return HexFormat.of().formatHex(hash);
+
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 algorithm is not available", e);
+        }
     }
 }
